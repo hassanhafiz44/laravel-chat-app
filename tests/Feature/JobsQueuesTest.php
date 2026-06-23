@@ -4,7 +4,6 @@ use App\Jobs\DeliverToChannel;
 use App\Jobs\FlakyJob;
 use App\Jobs\ProcessChatMessage;
 use App\Jobs\ValidateMessage;
-use App\Models\Conversation;
 use App\Models\Message;
 use Illuminate\Bus\PendingBatch;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -12,6 +11,7 @@ use Illuminate\Queue\Middleware\RateLimited;
 use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
@@ -41,16 +41,30 @@ it('dispatch — POST /api/demo/jobs/dispatch returns 202', function () {
 // ─── REAL HANDLE ─────────────────────────────────────────────────────────────
 
 it('handle — sets status to done and writes AI reply', function () {
+    Http::fake([
+        'api.groq.com/*' => Http::response([
+            'choices' => [['message' => ['content' => 'AI reply to: Hello!']]],
+        ]),
+    ]);
+
     $message = Message::factory()->fromUser()->create(['content' => 'Hello!']);
 
     (new ProcessChatMessage($message))->handle();
 
     $message->refresh();
+    $reply = $message->conversation->messages()->where('role', 'assistant')->latest()->first();
+
     expect($message->status)->toBe('done')
-        ->and($message->content)->toBe('AI reply to: Hello!');
+        ->and($reply->content)->toBe('AI reply to: Hello!');
 });
 
 it('handle — sets status to processing before writing reply', function () {
+    Http::fake([
+        'api.groq.com/*' => Http::response([
+            'choices' => [['message' => ['content' => 'AI reply to: Hi']]],
+        ]),
+    ]);
+
     $statuses = [];
 
     $message = Message::factory()->fromUser()->create(['content' => 'Hi']);
@@ -66,13 +80,24 @@ it('handle — sets status to processing before writing reply', function () {
         ->and($statuses)->toContain('done');
 });
 
+it('handle — throws when Groq API call fails', function () {
+    Http::fake([
+        'api.groq.com/*' => Http::response('Internal Server Error', 500),
+    ]);
+
+    $message = Message::factory()->fromUser()->create(['content' => 'Hello!']);
+
+    expect(fn () => (new ProcessChatMessage($message))->handle())
+        ->toThrow(RuntimeException::class);
+});
+
 // ─── FAILED() ────────────────────────────────────────────────────────────────
 
 it('failed() — marks message as failed and stores error', function () {
     $message = Message::factory()->fromUser()->create();
     $job = new ProcessChatMessage($message);
 
-    $job->failed(new \RuntimeException('Groq API timeout'));
+    $job->failed(new RuntimeException('Groq API timeout'));
 
     $message->refresh();
     expect($message->status)->toBe('failed')
@@ -144,7 +169,7 @@ it('chain — ValidateMessage throws when content is empty, stopping the chain',
     $message = Message::factory()->pending()->create();
 
     expect(fn () => (new ValidateMessage($message))->handle())
-        ->toThrow(\InvalidArgumentException::class, 'Message content cannot be empty');
+        ->toThrow(InvalidArgumentException::class, 'Message content cannot be empty');
 });
 
 it('chain — ValidateMessage succeeds and sets status to validated', function () {
@@ -207,7 +232,7 @@ it('FlakyJob throw — throws exception (normal retry path)', function () {
     $job = new FlakyJob('throw');
 
     expect(fn () => $job->handle())
-        ->toThrow(\RuntimeException::class, 'FlakyJob failed in mode: throw');
+        ->toThrow(RuntimeException::class, 'FlakyJob failed in mode: throw');
 });
 
 it('FlakyJob fail — fail() skips retries and does not rethrow', function () {
@@ -216,5 +241,5 @@ it('FlakyJob fail — fail() skips retries and does not rethrow', function () {
     // $this->fail($e) is a no-op without a real queue worker context (no $this->job).
     // In a real worker it skips remaining retries and routes straight to failed().
     // Here we verify: no exception propagates (unlike 'throw' mode).
-    expect(fn () => $job->handle())->not->toThrow(\Exception::class);
+    expect(fn () => $job->handle())->not->toThrow(Exception::class);
 });
