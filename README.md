@@ -1,6 +1,6 @@
 # chtbotlara
 
-A Laravel-based chat application with async message processing via queued jobs. AI integration is scaffolded and ready to wire up.
+A Laravel-based chat application with async message processing via queued jobs, integrated with the Groq API for AI replies.
 
 ## Stack
 
@@ -23,6 +23,13 @@ Configure your database in `.env`:
 
 ```env
 DB_CONNECTION=sqlite        # or mysql/pgsql
+```
+
+Set your Groq API key in `.env` (required for chat replies):
+
+```env
+GROQ_API_KEY=your-key-here
+GROQ_MODEL=llama-3.3-70b-versatile
 ```
 
 Run migrations and seed:
